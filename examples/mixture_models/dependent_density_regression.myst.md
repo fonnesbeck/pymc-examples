@@ -10,24 +10,33 @@ kernelspec:
   name: python3
 ---
 
+(dependent_density_regression)=
 # Dependent density regression
+:::{post} 2017
+:tags: mixture model, nonparametric
+:category: intermediate
+:author: Austin Rochford
+:::
+
 In another [example](dp_mix.ipynb), we showed how to use Dirichlet processes to perform Bayesian nonparametric density estimation.  This example expands on the previous one, illustrating dependent density regression.
 
 Just as Dirichlet process mixtures can be thought of as infinite mixture models that select the number of active components as part of inference, dependent density regression can be thought of as infinite [mixtures of experts](https://en.wikipedia.org/wiki/Committee_machine) that select the active experts as part of inference.  Their flexibility and modularity make them powerful tools for performing nonparametric Bayesian Data analysis.
 
 ```{code-cell} ipython3
+from io import StringIO
+
 import arviz as az
 import numpy as np
 import pandas as pd
-import pymc3 as pm
+import pymc as pm
+import pytensor.tensor as pt
+import requests
 import seaborn as sns
 
-from IPython.display import HTML
 from matplotlib import animation as ani
 from matplotlib import pyplot as plt
-from theano import tensor as tt
 
-print(f"Running on PyMC3 v{pm.__version__}")
+print(f"Running on PyMC v{pm.__version__}")
 ```
 
 ```{code-cell} ipython3
@@ -49,7 +58,8 @@ def standardize(x):
     return (x - x.mean()) / x.std()
 
 
-df = pd.read_csv(DATA_URI, sep=r"\s{1,3}", engine="python").assign(
+response = requests.get(DATA_URI, verify=False)
+df = pd.read_csv(StringIO(response.text), sep=r"\s{1,3}", engine="python").assign(
     std_range=lambda df: standardize(df.range), std_logratio=lambda df: standardize(df.logratio)
 )
 ```
@@ -120,6 +130,8 @@ plt.close()
 ```
 
 ```{code-cell} ipython3
+from IPython.display import HTML
+
 HTML(animation.to_html5_video())
 ```
 
@@ -147,12 +159,12 @@ For the LIDAR data set, we use independent normal priors $\alpha_i \sim N(0, 5^2
 
 ```{code-cell} ipython3
 def norm_cdf(z):
-    return 0.5 * (1 + tt.erf(z / np.sqrt(2)))
+    return 0.5 * (1 + pt.erf(z / np.sqrt(2)))
 
 
 def stick_breaking(v):
-    return v * tt.concatenate(
-        [tt.ones_like(v[:, :1]), tt.extra_ops.cumprod(1 - v, axis=1)[:, :-1]], axis=1
+    return v * pt.concatenate(
+        [pt.ones_like(v[:, :1]), pt.extra_ops.cumprod(1 - v, axis=1)[:, :-1]], axis=1
     )
 ```
 
@@ -167,7 +179,7 @@ with pm.Model(coords={"N": np.arange(N), "K": np.arange(K) + 1, "one": [1]}) as 
     alpha = pm.Normal("alpha", 0.0, 5.0, dims="K")
     beta = pm.Normal("beta", 0.0, 5.0, dims=("one", "K"))
     x = pm.Data("x", std_range)
-    v = norm_cdf(alpha + pm.math.dot(x, beta))
+    v = norm_cdf(alpha + x @ beta)
     w = pm.Deterministic("w", stick_breaking(v), dims=["N", "K"])
 ```
 
@@ -194,7 +206,7 @@ for the conditional component means.
 with model:
     gamma = pm.Normal("gamma", 0.0, 10.0, dims="K")
     delta = pm.Normal("delta", 0.0, 10.0, dims=("one", "K"))
-    mu = pm.Deterministic("mu", gamma + pm.math.dot(x, delta))
+    mu = pm.Deterministic("mu", gamma + x @ delta)
 ```
 
 Finally, we place the prior $\tau_i \sim \textrm{Gamma}(1, 1)$ on the component precisions.
@@ -211,12 +223,8 @@ pm.model_to_graphviz(model)
 We now sample from the dependent density regression model.
 
 ```{code-cell} ipython3
-SAMPLES = 20000
-BURN = 10000
-
 with model:
-    step = pm.Metropolis()
-    trace = pm.sample(SAMPLES, tune=BURN, step=step, random_seed=SEED, return_inferencedata=True)
+    trace = pm.sample(random_seed=SEED)
 ```
 
 To verify that truncation did not unduly influence our results, we plot the largest posterior expected mixture weight for each component.  (In this model, each point has a mixture weight for each component, so we plot the maximum mixture weight for each component across all data points in order to judge if the component exerts any influence on the posterior.)
@@ -239,28 +247,39 @@ Since only three mixture components have appreciable posterior expected weight f
 Visually, it is reasonable that the LIDAR data has three linear components, so these posterior expected weights seem to have identified the structure of the data well.  We now sample from the posterior predictive distribution to get a better understand the model's performance.
 
 ```{code-cell} ipython3
-PP_SAMPLES = 5000
-
 lidar_pp_x = np.linspace(std_range.min() - 0.05, std_range.max() + 0.05, 100)
 
 with model:
-    pm.set_data({"x": lidar_pp_x[:, np.newaxis]})
-    pp_trace = pm.sample_posterior_predictive(trace, PP_SAMPLES, random_seed=SEED)
+    pm.set_data({"x": lidar_pp_x[:, np.newaxis], "y": np.zeros_like(lidar_pp_x)})
+
+    pm.sample_posterior_predictive(
+        trace, predictions=True, extend_inferencedata=True, random_seed=SEED
+    )
 ```
 
 Below we plot the posterior expected value and the 95% posterior credible interval.
+
+```{code-cell} ipython3
+trace.predictions["obs"].mean(("chain", "draw")).shape
+```
 
 ```{code-cell} ipython3
 fig, ax = plt.subplots(figsize=(8, 6))
 
 ax.scatter(df.std_range, df.std_logratio, color=blue, zorder=10, label=None)
 
-low, high = np.percentile(pp_trace["obs"], [2.5, 97.5], axis=0)
+low, high = np.percentile(az.extract(trace.predictions)["obs"].T, [2.5, 97.5], axis=0)
 ax.fill_between(
     lidar_pp_x, low, high, color="k", alpha=0.35, zorder=5, label="95% posterior credible interval"
 )
 
-ax.plot(lidar_pp_x, pp_trace["obs"].mean(axis=0), c="k", zorder=6, label="Posterior expected value")
+ax.plot(
+    lidar_pp_x,
+    trace.predictions["obs"].mean(("chain", "draw")).values,
+    c="k",
+    zorder=6,
+    label="Posterior expected value",
+)
 
 ax.set_xticklabels([])
 ax.set_xlabel("Standardized range")
@@ -278,13 +297,21 @@ To learn more about dependent density regression and related models, consult [_B
 
 This example first appeared [here](http://austinrochford.com/posts/2017-01-18-ddp-pymc3.html).
 
-Author: [Austin Rochford](https://github.com/AustinRochford/)
++++
+
+## Authors
+* authored by Austin Rochford in 2017
+* updated to PyMC v5 by Christopher Fonnesbeck in September2024
+
++++
+
+## References
+
+:::{bibliography}
+:filter: docname in docnames
+:::
 
 ```{code-cell} ipython3
 %load_ext watermark
 %watermark -n -u -v -iv -w
-```
-
-```{code-cell} ipython3
-
 ```
