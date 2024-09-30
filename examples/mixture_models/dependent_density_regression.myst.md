@@ -5,7 +5,7 @@ jupytext:
     format_name: myst
     format_version: 0.13
 kernelspec:
-  display_name: Python 3
+  display_name: Python 3 (ipykernel)
   language: python
   name: python3
 ---
@@ -286,7 +286,7 @@ pm.model_to_graphviz(model)
 
 +++ {"id": "gUPThEEEg8LF"}
 
-We now sample from the dependent density regression model using a Metropolis sampler. The default NUTS sampler has a difficult time sampling from this model, and the traceplots show poor convergence.
+We now sample from the dependent density regression model using a Metropolis sampler. The default NUTS sampler has a difficult time sampling the stick-breaking model, so we will employ a `CompoundSampler`, using a slice sampler for `alpha` and `beta` while leaving NUTS for the rest of the parameters.
 
 ```{code-cell} ipython3
 ---
@@ -298,7 +298,13 @@ id: FSYdNHFUg8LF
 outputId: 829d4ee8-c971-4962-aa71-265f93eeb356
 ---
 with model:
-    trace = pm.sample(random_seed=SEED, step=pm.Metropolis(), draws=10_000, tune=10_000, cores=2)
+    trace = pm.sample(random_seed=SEED, step=pm.Slice([alpha, beta]), tune=5_000, cores=2)
+```
+
+We can see from the R-hat diagnostics below (all near 1.0) that the model is reasonably well converged.
+
+```{code-cell} ipython3
+az.summary(trace, var_names=["beta"])
 ```
 
 +++ {"id": "io6KXPdgg8LF"}
@@ -327,7 +333,7 @@ ax.set_ylabel("Largest posterior expected\nmixture weight");
 
 +++ {"id": "6Pq0WqBbg8LF"}
 
-Since only three mixture components have appreciable posterior expected weight for any data point, we can be fairly certain that truncation did not unduly influence our results.  (If most components had appreciable posterior expected weight, truncation may have influenced the results, and we would have increased the number of components and sampled again.)
+Since only six mixture components have appreciable posterior expected weight for any data point, we can be fairly certain that truncation did not unduly influence our results.  (If most components had appreciable posterior expected weight, truncation may have influenced the results, and we would have increased the number of components and sampled again.)
 
 Visually, it is reasonable that the LIDAR data has three linear components, so these posterior expected weights seem to have identified the structure of the data well.  We now sample from the posterior predictive distribution to get a better understand the model's performance.
 
