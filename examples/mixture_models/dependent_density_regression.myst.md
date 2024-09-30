@@ -409,7 +409,7 @@ This example first appeared [here](http://austinrochford.com/posts/2017-01-18-dd
 
 ## Authors
 * authored by Austin Rochford in 2017
-* updated to PyMC v5 by Christopher Fonnesbeck in September2024
+* updated to PyMC v5 by Christopher Fonnesbeck in September 2024
 
 +++ {"id": "e41HT-6Og8LF"}
 
